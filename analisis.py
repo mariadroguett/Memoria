@@ -1,184 +1,98 @@
-import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
-import argparse
+from scipy.spatial import ConvexHull
+from experiment import run_global_experiment  
+import csv
 import os
-import cdd
-from scipy.spatial import HalfspaceIntersection, ConvexHull
-from scipy.optimize import linprog
+import time
+import argparse
+from generator import generar_politopo_k
+
+# def generar_politopo_k(K, d, n_puntos=50):
+    # puntos = np.random.rand(n_puntos, d + 1)
+    # puntos[:, 0] *= K
+    # hull = ConvexHull(puntos,  qhull_options='QJ')
+    # A = hull.equations[:, :-1]
+    # b = -hull.equations[:, -1]
+    # return A, b
 
 
-def plot_histograma_F(k):
-    archivo = f"salida_k/resultados_k_{k:03d}.csv"
-    if not os.path.exists(archivo):
-        print(f"No se encontró: {archivo}")
-        return
+def guardar_Ab_txt(A, b, carpeta, K, iteracion):
+    nombre = f"Ab_k{K:03d}_iter{iteracion:03d}.txt"
+    ruta = os.path.join(carpeta, nombre)
+    with open(ruta, 'w') as f:
+        f.write("# A\n")
+        for fila in A:
+            f.write(" ".join(f"{x:.6f}" for x in fila) + "\n")
+        f.write("# b\n")
+        f.write(" ".join(f"{x:.6f}" for x in b) + "\n")
 
-    df = pd.read_csv(archivo)
-    if 'F' not in df.columns:
-        print(f"No hay columna F en el archivo.")
-        return
+def guardar_fibras(A, b, K, d, iteracion, carpeta):
+    for z in range(K + 1):
+        A_p = A[:, 1:]
+        b_z = b - A[:, 0] * z
+        nombre = f"fibras_k{K:03d}_iter{iteracion:03d}_z{z:02d}.txt"
+        ruta = os.path.join(carpeta, nombre)
+        with open(ruta, 'w') as f:
+            f.write(f"# S_{z} ⊆ ℝ^{d} definida por A_z p ≤ b_z\n")
+            for fila in A_p:
+                f.write(" ".join(f"{x:.6f}" for x in fila) + "\n")
+            f.write("# b_z\n")
+            f.write(" ".join(f"{x:.6f}" for x in b_z) + "\n")
 
-    Fs = df['F'].dropna().to_numpy()
-    n_total = len(Fs)
+def main(K, repeticiones=1, N1=1000, N2=50, N3=10000):
+    d = 2
+    carpeta = 'salida_k'
+    os.makedirs(carpeta, exist_ok=True)
 
-    promedio = np.mean(Fs)
-    mediana = np.median(Fs)
-    std_dev = np.std(Fs)
-    minimo = np.min(Fs)
-    maximo = np.max(Fs)
-    q1 = np.percentile(Fs, 25)
-    q3 = np.percentile(Fs, 75)
+    archivo_csv = os.path.join(carpeta, f"resultados_k_{K:03d}.csv")
 
-    cota_teorica = 1 / (2 * np.e)
-    cota_alta = 0.22
-    cota_baja = 0.16
+    start_iter = 0
+    if os.path.exists(archivo_csv):
+        with open(archivo_csv, 'r') as f_check:
+            start_iter = sum(1 for line in f_check) - 1  
 
-    n_bajo = np.sum(Fs < cota_baja)
-    n_medio = np.sum((Fs >= cota_baja) & (Fs <= cota_alta))
-    n_alto = np.sum(Fs > cota_alta)
+    modo = 'a' if start_iter > 0 else 'w'
+    errores = 0
+    exitosos = 0
+    start_time = time.time()
 
-    print(f" Estadísticas para k = {k} ({n_total} muestras):")
-    print(f"  ▸ Promedio     : {promedio:.6f}")
-    print(f"  ▸ Mediana      : {mediana:.6f}")
-    print(f"  ▸ Std. Dev.    : {std_dev:.6f}")
-    print(f"  ▸ Mínimo       : {minimo:.6f}")
-    print(f"  ▸ Máximo       : {maximo:.6f}")
-    print(f"  ▸ Q1 / Q3      : {q1:.6f} / {q3:.6f}")
-    print()
-    print(f"Resultados para k={k} (n={n_total}):")
-    print(f"  F < 0.16: {n_bajo} ({n_bajo/n_total:.1%})")
-    print(f"  0.16 ≤ F ≤ 0.22: {n_medio} ({n_medio/n_total:.1%})")
-    print(f"  F > 0.22: {n_alto} ({n_alto/n_total:.1%})")
-    print(f"  Cota teórica 1/(2e) ≈ {cota_teorica:.4f}")
+    with open(archivo_csv, modo, newline='') as f_csv:
+        writer = csv.writer(f_csv)
+        if modo == 'w':
+            writer.writerow(['iteracion', 'cp', 'F'])
 
-    plt.figure(figsize=(10, 6))
-    plt.hist(Fs, bins=40, color='skyblue', edgecolor='black')
+        for i in range(start_iter, start_iter + repeticiones):
+            try:
+                A, b = generar_politopo_k(K, d)
+                resultado = run_global_experiment(A, b, K, d, N1=N1, N2=N2, N3=N3)
+                cp = resultado['best_cp']
+                F = resultado['F']
 
-    plt.axvline(cota_teorica, color='red', linestyle='--', linewidth=2, label=f'Cota 1/(2e) ≈ {cota_teorica:.4f}')
-    plt.axvline(cota_alta, color='orange', linestyle='--', linewidth=2, label='Cota alta 0.22')
-    plt.axvline(cota_baja, color='green', linestyle='--', linewidth=2, label='Cota baja 0.16')
+                if resultado['caso_favorable']:
+                    continue  # salta esta iteración
 
-    plt.title(f'Distribución de F para k = {k} (n = {n_total})')
-    plt.xlabel('F')
-    plt.ylabel('Frecuencia')
+                guardar_Ab_txt(A, b, carpeta, K, i)
+                guardar_fibras(A, b, K, d, i, carpeta)
 
-    plt.legend(loc='upper right')
-    plt.grid(True, linestyle="--", alpha=0.4)
-    plt.tight_layout()
-    plt.show()
+                cp_str = ','.join(f"{x:.6f}" for x in cp) if cp is not None else "null"
+                writer.writerow([i, cp_str, F])
+                exitosos += 1
 
-def h_to_v(A, b):
-    m, d = A.shape
-    mat_np = np.hstack([b.reshape(-1, 1), -A])
-    mat_cdd = cdd.Matrix()
-    mat_cdd.extend(mat_np.tolist())
-    mat_cdd.rep_type = cdd.RepType.INEQUALITY
-    poly = cdd.Polyhedron(mat_cdd)
-    generators = poly.get_generators()
-    vertices = [gen[1:] for gen in generators if gen[0] == 1]
-    return np.array(vertices)
+                #np.savetxt(os.path.join(carpeta, f"volumen_k{K:03d}_iter{i:03d}.txt"), np.array([F]), fmt='%.8f')
 
-def exportar_v(k, iter_num):
-    carpeta = "salida_k"
-    archivo_h = os.path.join(carpeta, f"Ab_k{k:03d}_iter{iter_num:03d}.txt")
+                print(f" Iteración {i}: F = {F:.6f}, cp = {cp_str}")
 
-    if not os.path.exists(archivo_h):
-        print(f"No se encontró el archivo H: {archivo_h}")
-        return
+            except Exception as e:
+                errores += 1
+                print(f" Error en k={K}, iter={i}: {e}")
 
-    with open(archivo_h, 'r') as f:
-        lines = f.readlines()
-        A_lines = []
-        b_line = []
-        parsing_b = False
-        for line in lines:
-            if line.strip().startswith("# b"):
-                parsing_b = True
-                continue
-            if parsing_b:
-                b_line = list(map(float, line.strip().split()))
-            elif line.strip() and not line.strip().startswith("#"):
-                A_lines.append(list(map(float, line.strip().split())))
-
-    A = np.array(A_lines)
-    b = np.array(b_line)
-
-    vertices = h_to_v(A, b)
-    out_file = os.path.join(carpeta, f"vertices_v_k{k:03d}_iter{iter_num:03d}.txt")
-    np.savetxt(out_file, vertices, fmt="%.6f", header="Vértices extremos")
-    print(f"✔ Representación V guardada en: {out_file}")
-
-def leer_fibra_txt(path):
-    with open(path, 'r') as f:
-        lines = f.readlines()
-
-    A = []
-    b = []
-    modo = 'A'
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            if 'b_z' in line:
-                modo = 'b'
-            continue
-        if modo == 'A':
-            A.append(list(map(float, line.split())))
-        else:
-            b = list(map(float, line.split()))
-    return np.array(A), np.array(b)
-
-def centro_interior(A, b):
-    d = A.shape[1]
-    c = np.zeros(d)
-    res = linprog(c, A_ub=A, b_ub=b)
-    if res.success:
-        return res.x
-    else:
-        return None
-
-def graficar_fibra_2d(A, b, z):
-    interior = centro_interior(A, b)
-    if interior is None:
-        print(f"No se pudo encontrar punto interior en z = {z}")
-        return
-    hs = np.hstack([-b[:, np.newaxis], A])
-    hs_int = HalfspaceIntersection(hs, interior)
-    hull = ConvexHull(hs_int.intersections)
-    plt.fill(*hs_int.intersections[hull.vertices].T, alpha=0.5, label=f'z = {z}')
-    plt.plot(*hs_int.intersections[hull.vertices].T, 'ko-')
-
-def graficar_todas_fibras_2d(k, iteracion):
-    carpeta = "salida_k"
-    plt.figure(figsize=(8, 6))
-    for z in range(k+1):
-        archivo = os.path.join(carpeta, f"fibras_k{k:03d}_iter{iteracion:03d}_z{z:02d}.txt")
-        if not os.path.exists(archivo):
-            print(f"No existe: {archivo}")
-            continue
-        A, b = leer_fibra_txt(archivo)
-        graficar_fibra_2d(A, b, z)
-    plt.title(f"Lonjas (fibras) proyectadas para K={k}")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.3)
-    plt.xlabel('x₁')
-    plt.ylabel('x₂')
-    plt.axis('equal')
-    plt.tight_layout()
-    plt.show()
+    tiempo_total = time.time() - start_time
+    print(f"\nFinalizado k={K}: {exitosos}/{repeticiones} exitosos, {errores} errores")
+    print(f"Tiempo total: {tiempo_total:.2f}s | Promedio por iteración: {tiempo_total/repeticiones:.3f}s")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--k', type=int, required=True, help="Valor de k a graficar")
-    parser.add_argument('--export_v', action='store_true', help="Exportar representación V (solo si se activa)")
-    parser.add_argument('--iter', type=int, default=0, help="Número de iteración a usar para leer A, b (por defecto 0)")
-    parser.add_argument('--plot_fibras', action='store_true', help="Graficar lonjas proyectadas")
+    parser.add_argument('--k', type=int, required=True, help='Valor de k (longitud discreta)')
     args = parser.parse_args()
+    main(args.k)
 
-    plot_histograma_F(args.k)
-
-    if args.export_v:
-        exportar_v(args.k, args.iter)
-
-    if args.plot_fibras:
-        graficar_todas_fibras_2d(args.k, args.iter)
