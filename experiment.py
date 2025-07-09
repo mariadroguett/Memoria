@@ -22,8 +22,8 @@ def rejection_sampling(d, A, b, z, N):
     # A_z = A[:,0]*z.T
     A_z = A[:, 0] * z
     A_rest = A[:,1:] 
-    print(A_rest.shape)
-    print(A_rest)
+   # print(A_rest.shape)
+   # print(A_rest)
     #for _ in range(N):
     p = np.random.uniform(0, 1, size=(N,d))
     #x = np.hstack(([z], p))
@@ -37,7 +37,6 @@ def rejection_sampling(d, A, b, z, N):
     #("Resultado del rejection_sampling", res)
 
     return res
-   
 
     #     if np.all(A @ x <= b + 1e-8):
     #         count += 1

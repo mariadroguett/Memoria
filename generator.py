@@ -2,88 +2,56 @@ import numpy as np
 from scipy.spatial import ConvexHull
 import matplotlib.pyplot as plt
 
-"""
-Generador de politopos a partir de uniones de fibras aleatorias.
+def sample_points(d, N, scale, rng=None):
+    """Muestra N puntos uniformemente en [-scale, scale]^d"""
+    rng = rng or np.random.default_rng()
+    return rng.uniform(-scale, scale, size=(N, d))
 
-Funciones:
-- sample_points(...)
-- generate_random_fiber(...)
-- generate_convex_fiber_union(...)
-"""
-
-
-def sample_points(d, N, scale, dist_type='uniform'):
-    """Sample N points in R^d from a specified distribution, scaled accordingly."""
-    if dist_type == 'uniform':
-        return np.random.uniform(-scale, scale, size=(N, d))
-    elif dist_type == 'normal':
-        return np.random.normal(0, scale, size=(N, d))
-    elif dist_type == 'ball':
-        vec = np.random.normal(0, 1, size=(N, d))
-        vec /= np.linalg.norm(vec, axis=1, keepdims=True)
-        radii = np.random.uniform(0, scale, size=(N, 1))
-        return vec * radii
-    elif dist_type == 'simplex':
-        exp_samples = np.random.exponential(1.0, size=(N, d + 1))
-        points = exp_samples / exp_samples.sum(axis=1, keepdims=True)
-        return (points[:, :-1] - 1/d) * scale
-    else:
-        raise ValueError(f"Unsupported distribution: '{dist_type}'")
-
-def generate_random_fiber(z, d, N, scale, families=None, seed=None):
-    """Generate a random fiber at level z in [0, scale]^d, from selected distribution family."""
-    if seed is not None:
-        np.random.seed(seed)
-    if families is None or len(families) == 0:
-        families = ['uniform', 'normal', 'ball', 'simplex']
-
-    dist_type = np.random.choice(families)
-    points = sample_points(d, N, scale, dist_type)
-    return np.hstack([np.full((N, 1), z), points]), dist_type
+def generate_random_fiber(z, d, N, scale, rng=None):
+    """Genera una fibra en altura z con puntos distribuidos uniformemente."""
+    rng = rng or np.random.default_rng()
+    points = sample_points(d, N, scale, rng)
+    fiber = np.hstack([np.full((N, 1), z), points])
+    return fiber
 
 def generate_convex_fiber_union(
-    num_fibers, d, scale_array, N_array=None, families=None,
+    num_fibers, d, scale_array, N_array=None,
     seed=None, visualize=False, N_min=5, N_max=15
 ):
     """
-    Generates a convex polytope as the convex hull of union of fibers 
-    located at z-levels 0, 1, ..., num_fibers-1 in R^{d+1}.
+    Genera un politopo como la envolvente convexa de uniones de fibras aleatorias
+    distribuidas uniformemente. Todas las fibras están en niveles z = 0, 1, ..., K.
     """
     if len(scale_array) != num_fibers:
-        raise ValueError("Length of scale_array must match num_fibers")
+        raise ValueError("scale_array debe tener num_fibers elementos")
 
-    if families is None or len(families) == 0:
-        families = ['uniform', 'normal', 'ball', 'simplex']
+    rng = np.random.default_rng(seed)
 
     if N_array is None:
-        rng = np.random.default_rng(seed + 999 if seed is not None else None)
         N_array = rng.integers(N_min, N_max + 1, size=num_fibers)
 
     all_points = []
-    dist_types_used = []
 
     for i in range(num_fibers):
-        z = i 
-        scale_i = scale_array[i]
+        z = i
         N_i = N_array[i]
-        seed_i = seed + i if seed is not None else None
+        scale_i = scale_array[i]
 
-        fiber_points, dist_type = generate_random_fiber(z, d, N_i, scale_i, families=families, seed=seed_i)
+        fiber_points = generate_random_fiber(z, d, N_i, scale_i, rng)
         all_points.append(fiber_points)
-        dist_types_used.append(dist_type)
 
     all_points = np.vstack(all_points)
-    hull = ConvexHull(all_points)
+    hull = ConvexHull(all_points, qhull_options='QJ' )
     A = hull.equations[:, :-1]
     b = -hull.equations[:, -1]
 
     if visualize and d == 2:
         plot_convex_hull_3d(all_points, hull, N_array)
 
-    return all_points, hull, A, b, dist_types_used, N_array
+    return all_points, hull, A, b, N_array
 
 def plot_convex_hull_3d(points, hull, N_array=None):
-    """Plot 3D convex hull for d = 2 case (i.e., R^3)"""
+    """Grafica la convex hull en 3D para el caso d = 2 (R^3)."""
     fig = plt.figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection='3d')
     cmap = plt.get_cmap('tab10')
@@ -107,3 +75,24 @@ def plot_convex_hull_3d(points, hull, N_array=None):
     ax.legend()
     plt.tight_layout()
     plt.show()
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--fibers', type=int, default=4, help="Número de fibras")
+    parser.add_argument('--d', type=int, default=2, help="Dimensión de la fibra")
+    parser.add_argument('--scale', type=float, default=1.0, help="Escala para cada fibra")
+    parser.add_argument('--seed', type=int, default=42, help="Semilla")
+    parser.add_argument('--visualize', action='store_true', help="Visualizar convex hull")
+    args = parser.parse_args()
+
+    scale_array = [args.scale] * args.fibers
+    generate_convex_fiber_union(
+        num_fibers=args.fibers,
+        d=args.d,
+        scale_array=scale_array,
+        seed=args.seed,
+        visualize=args.visualize
+    )
